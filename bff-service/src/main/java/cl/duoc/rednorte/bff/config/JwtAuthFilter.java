@@ -1,4 +1,4 @@
-package cl.duoc.rednorte.listaespera.config;
+package cl.duoc.rednorte.bff.config;
 
 import jakarta.servlet.*;
 import jakarta.servlet.http.*;
@@ -36,7 +36,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         }
 
         try {
-            final String jwt = authHeader.substring(7);
+            final String jwt   = authHeader.substring(7);
             final String email = jwtService.extractEmail(jwt);
             final String rol   = jwtService.extractRol(jwt);
 
