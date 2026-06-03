@@ -2,23 +2,6 @@ version: '3.8'
 
 services:
 
-  # ── Frontend ───────────────────────────────────────────────────────────
-  frontend:
-    build:
-      context: ../rednorte-frontend-main
-      dockerfile: Dockerfile
-    ports:
-      - "5173:5173"
-    volumes:
-      - ../rednorte-frontend-main/src:/app/src
-      - ../rednorte-frontend-main/public:/app/public
-    depends_on:
-      - lista-espera-service
-      - paciente-service
-      - medico-service
-    networks:
-      - rednorte-network
-
   # ── Microservicios Backend ─────────────────────────────────────────────
   lista-espera-service:
     build:
