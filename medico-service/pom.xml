@@ -116,6 +116,19 @@
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
         <version>0.8.12</version>
+        <configuration>
+          <excludes>
+            <exclude>**/config/**</exclude>
+            <exclude>**/controller/**</exclude>
+            <exclude>**/exception/**</exclude>
+            <exclude>**/*Application.class</exclude>
+            <exclude>**/service/AuthService.class</exclude>
+            <exclude>**/service/UsuarioDetailsService.class</exclude>
+            <exclude>**/dto/**</exclude>
+            <exclude>**/model/Usuario.class</exclude>
+            <exclude>**/model/RolUsuario.class</exclude>
+          </excludes>
+        </configuration>
         <executions>
           <execution><goals><goal>prepare-agent</goal></goals></execution>
           <execution>
