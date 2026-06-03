@@ -1,0 +1,139 @@
+version: '3.8'
+
+services:
+
+  # ── Frontend ───────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ../rednorte-frontend-main
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../rednorte-frontend-main/src:/app/src
+      - ../rednorte-frontend-main/public:/app/public
+    depends_on:
+      - lista-espera-service
+      - paciente-service
+      - medico-service
+    networks:
+      - rednorte-network
+
+  # ── Microservicios Backend ─────────────────────────────────────────────
+  lista-espera-service:
+    build:
+      context: ./lista-espera-service
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      DB_URL: jdbc:postgresql://db-lista-espera:5432/lista_espera_db
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      PACIENTE_SERVICE_URL: http://paciente-service:8081
+      MEDICO_SERVICE_URL: http://medico-service:8082
+    depends_on:
+      db-lista-espera:
+        condition: service_healthy
+    networks:
+      - rednorte-network
+
+  paciente-service:
+    build:
+      context: ./paciente-service
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      DB_URL: jdbc:postgresql://db-paciente:5432/paciente_db
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+    depends_on:
+      db-paciente:
+        condition: service_healthy
+    networks:
+      - rednorte-network
+
+  medico-service:
+    build:
+      context: ./medico-service
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      DB_URL: jdbc:postgresql://db-medico:5432/medico_db
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+    depends_on:
+      db-medico:
+        condition: service_healthy
+    networks:
+      - rednorte-network
+
+  # ── Bases de datos ─────────────────────────────────────────────────────
+  db-lista-espera:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: lista_espera_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - lista_espera_data:/var/lib/postgresql/data
+      - ./seed_500_lista_espera.sql:/seeds/seed_lista_espera.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d lista_espera_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rednorte-network
+
+  db-paciente:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: paciente_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - paciente_data:/var/lib/postgresql/data
+      - ./seed_500_pacientes.sql:/seeds/seed_pacientes.sql
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d paciente_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rednorte-network
+
+  db-medico:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: medico_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - medico_data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d medico_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rednorte-network
+
+# ── Volúmenes persistentes ─────────────────────────────────────────────
+volumes:
+  lista_espera_data:
+  paciente_data:
+  medico_data:
+
+# ── Red interna ────────────────────────────────────────────────────────
+networks:
+  rednorte-network:
+    driver: bridge
