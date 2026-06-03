@@ -5,8 +5,10 @@ import cl.duoc.rednorte.listaespera.model.ListaEspera;
 import cl.duoc.rednorte.listaespera.model.ListaEspera.EstadoSolicitud;
 import cl.duoc.rednorte.listaespera.repository.CitaMedicaRepository;
 import cl.duoc.rednorte.listaespera.repository.ListaEsperaRepository;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
@@ -25,6 +27,12 @@ public class BffController {
     private final ListaEsperaRepository listaEsperaRepo;
     private final CitaMedicaRepository  citaRepo;
     private final RestTemplate          restTemplate;
+
+    @Value("${services.paciente.url}")
+    private String pacienteServiceUrl;
+
+    @Value("${services.medico.url}")
+    private String medicoServiceUrl;
 
     // ── Dashboard Paciente ────────────────────────────────────────────
     @GetMapping("/paciente/{pacienteId}")
@@ -100,31 +108,23 @@ public class BffController {
     @GetMapping("/medico/{medicoUsuarioId}")
     public ResponseEntity<Map<String, Object>> dashboardMedico(@PathVariable Long medicoUsuarioId) {
 
-        // Citas de hoy (todo el día)
         LocalDateTime inicioDia = LocalDate.now().atStartOfDay();
         LocalDateTime finDia    = inicioDia.plusDays(1).minusNanos(1);
 
-        List<CitaMedica> citasHoy;
-
-        // Intentar filtrar por nombre del médico; si falla mostrar todas las citas de hoy
         String nombreMedico = fetchNombreMedico(medicoUsuarioId);
+        List<CitaMedica> citasHoy;
         if (nombreMedico != null) {
             citasHoy = citaRepo.findByNombreMedicoAndFechaHoraCitaBetween(nombreMedico, inicioDia, finDia);
         } else {
             citasHoy = citaRepo.findByFechaHoraCitaBetweenOrderByFechaHoraCitaAsc(inicioDia, finDia);
         }
 
-        // Pacientes en espera (total pendientes)
-        long totalPendientes = listaEsperaRepo.findByEstado(EstadoSolicitud.PENDIENTE).size();
-
-        // KPIs del día
-        long atendidosHoy = citasHoy.stream()
-            .filter(c -> c.getEstado() == CitaMedica.EstadoCita.REALIZADA).count();
+        long totalPendientes     = listaEsperaRepo.findByEstado(EstadoSolicitud.PENDIENTE).size();
+        long atendidosHoy        = citasHoy.stream().filter(c -> c.getEstado() == CitaMedica.EstadoCita.REALIZADA).count();
         long citasProgramadasHoy = citasHoy.stream()
             .filter(c -> c.getEstado() == CitaMedica.EstadoCita.PROGRAMADA
                       || c.getEstado() == CitaMedica.EstadoCita.CONFIRMADA).count();
 
-        // Colectar pacienteIds únicos para enriquecer con nombre
         Set<Long> pacienteIds = citasHoy.stream()
             .map(c -> c.getListaEspera().getPacienteId())
             .collect(Collectors.toSet());
@@ -132,8 +132,8 @@ public class BffController {
         Map<Long, String> nombresPacientes = fetchNombresPacientes(pacienteIds);
 
         List<Map<String, Object>> citasHoyDTO = citasHoy.stream().map(c -> {
-            Long pacienteId    = c.getListaEspera().getPacienteId();
-            String pacNombre   = nombresPacientes.getOrDefault(pacienteId, "Paciente #" + pacienteId);
+            Long pacienteId  = c.getListaEspera().getPacienteId();
+            String pacNombre = nombresPacientes.getOrDefault(pacienteId, "Paciente #" + pacienteId);
 
             Map<String, Object> listaEsperaMap = new HashMap<>();
             listaEsperaMap.put("id",             c.getListaEspera().getId());
@@ -162,39 +162,42 @@ public class BffController {
         return ResponseEntity.ok(response);
     }
 
-    // ── Helpers internos ──────────────────────────────────────────────
+    // ── Helpers con Circuit Breaker ───────────────────────────────────
 
-    private String fetchNombreMedico(Long usuarioId) {
-        try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> data = restTemplate.getForObject(
-                "http://localhost:8082/api/internal/medicos/usuario/" + usuarioId, Map.class);
-            if (data == null) return null;
-            String nombre   = (String) data.get("nombre");
-            String apellido = (String) data.get("apellido");
-            return (nombre + " " + apellido).trim();
-        } catch (Exception e) {
-            log.warn("No se pudo obtener nombre del médico {}: {}", usuarioId, e.getMessage());
-            return null;
-        }
+    @CircuitBreaker(name = "medicoClient", fallbackMethod = "fetchNombreMedicoFallback")
+    String fetchNombreMedico(Long usuarioId) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = restTemplate.getForObject(
+            medicoServiceUrl + "/api/internal/medicos/usuario/" + usuarioId, Map.class);
+        if (data == null) return null;
+        return ((String) data.get("nombre") + " " + (String) data.get("apellido")).trim();
     }
 
-    private Map<Long, String> fetchNombresPacientes(Set<Long> ids) {
+    String fetchNombreMedicoFallback(Long usuarioId, Throwable t) {
+        log.warn("Circuit breaker activo para medico-service (usuarioId={}): {}", usuarioId, t.getMessage());
+        return null;
+    }
+
+    @CircuitBreaker(name = "pacienteClient", fallbackMethod = "fetchNombresPacientesFallback")
+    Map<Long, String> fetchNombresPacientes(Set<Long> ids) {
         Map<Long, String> result = new HashMap<>();
         for (Long id : ids) {
             try {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> data = restTemplate.getForObject(
-                    "http://localhost:8081/api/internal/pacientes/" + id, Map.class);
+                    pacienteServiceUrl + "/api/internal/pacientes/" + id, Map.class);
                 if (data != null) {
-                    String nombre   = (String) data.get("nombre");
-                    String apellido = (String) data.get("apellido");
-                    result.put(id, (nombre + " " + apellido).trim());
+                    result.put(id, ((String) data.get("nombre") + " " + (String) data.get("apellido")).trim());
                 }
             } catch (Exception e) {
                 log.warn("No se pudo obtener nombre del paciente {}: {}", id, e.getMessage());
             }
         }
         return result;
+    }
+
+    Map<Long, String> fetchNombresPacientesFallback(Set<Long> ids, Throwable t) {
+        log.warn("Circuit breaker activo para paciente-service: {}", t.getMessage());
+        return Collections.emptyMap();
     }
 }
